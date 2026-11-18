@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tts-LJ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* palette and type from nickvankemenade-ai.github.io */
+  :root {
+    --ground:#1d1d1d; --surface:#272726; --band:#2e2e2d; --border:#3a3a38;
+    --text:#ececea; --text-body:#cfcfcb; --text-muted:#a6a6a2;
+    --accent:#8ba5c1; --accent-ink:#16191d; --link:#9db4cc; --bad:#e08a7a;
+    --serif:"Newsreader", Georgia, serif; --sans:"Instrument Sans", system-ui, -apple-system, sans-serif;
+    --radius:10px;
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; background:var(--ground); color:var(--text); font:16px/1.5 var(--sans); }
+  a { color:var(--link); }
+
+
+  main { max-width:980px; margin:0 auto; padding:56px 24px 40px; }
+  h1 { font-family:var(--serif); font-weight:400; font-size:clamp(40px, 7vw, 64px); letter-spacing:-.025em; line-height:1.05; margin:0 0 14px; }
+  .lede { color:var(--text-body); font-size:19px; margin:0 0 36px; max-width:640px; }
+  h2 { font-family:var(--serif); font-weight:400; font-size:32px; letter-spacing:-.015em; margin:56px 0 6px; }
+  .sub { color:var(--text-muted); margin:0 0 18px; font-size:15px; }
+
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px; }
+  textarea { width:100%; min-height:96px; resize:vertical; background:var(--ground); color:var(--text);
+    border:1px solid var(--border); border-radius:8px; padding:14px 16px; font:17px/1.5 var(--sans); }
+  textarea:focus { outline:none; border-color:var(--accent); }
+  .controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px 18px; margin-top:16px; }
+  .spacer { flex:1; }
+
+  button { font:500 15px var(--sans); border-radius:8px; padding:10px 18px; cursor:pointer;
+    background:transparent; color:var(--text); border:1px solid var(--border); transition:border-color .15s, background .15s; }
+  button:hover { border-color:var(--text-muted); }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  button.primary:hover { background:#9db4cc; border-color:#9db4cc; }
+  button:disabled { opacity:.45; cursor:default; }
+  button.rec { color:var(--bad); }
+  .seg { display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; padding:8px 14px; color:var(--text-muted); }
+  .seg button.on { background:var(--band); color:var(--text); }
+
+  label { color:var(--text-muted); font-size:14px; display:inline-flex; align-items:center; gap:8px; }
+  input[type=range] { accent-color:var(--accent); width:120px; }
+  input[type=checkbox] { accent-color:var(--accent); }
+  audio { height:36px; }
+  .result { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:16px; min-height:36px; }
+  .result a { font-size:14px; }
+
+  .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:14px; }
+  .divider { width:1px; height:26px; background:var(--border); margin:0 2px; }
+  #wrap { display:flex; background:#141414; border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  #axis { flex:none; }
+  #scroll { overflow-x:auto; flex:1; }
+  #spec { display:block; cursor:crosshair; touch-action:none; }
+  #readout { color:var(--text-muted); font-size:13px; min-height:20px; margin-top:8px; }
+
+  #msg { color:var(--text-muted); font-size:14px; min-height:21px; margin:12px 0 0; }
+  #msg.err { color:var(--bad); }
+  #msg:empty { display:none; }
+
+  @media (max-width:640px) { main { padding:36px 16px; } }
+</style>
+</head>
+<body>
+
+<main>
+  <h1>Text-To-Speech using <span style="white-space:nowrap">mel-spectrograms</span></h1>
+  <p class="lede">A text-to-mel model and a GAN vocoder, both trained from scratch on a laptop GPU. Type something and listen.</p>
+
+  <section class="card">
+    <textarea id="ttsText" maxlength="1000" spellcheck="false"></textarea>
+    <div class="controls">
+      <label>speed <input type="range" id="ttsSpeed" min="0.6" max="1.6" step="0.05" value="1"> <span id="speedV">1.00×</span></label>
+      <span class="spacer"></span>
+      <button id="speakBtn" class="primary">Speak</button>
+    </div>
+    <div class="result">
+      <audio id="outAudio" controls></audio>
+      <a id="dl" download="speech.wav" hidden>Download WAV</a>
+    </div>
+    <p id="msg"></p>
+  </section>
+
+  <h2>Spectrogram</h2>
+  <p class="sub">The mel spectrogram the vocoder hears. Record your voice, load a held-out recording, or paint your own, then vocode it.</p>
+  <section class="card">
+    <div class="toolbar">
+      <button id="recBtn" class="rec">● Record</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <button id="exampleBtn">Example</button>
+      <button id="blankBtn">Blank</button>
+      <span class="divider"></span>
+      <span class="seg"><button id="paintBtn" class="on">Paint</button><button id="eraseBtn">Erase</button></span>
+      <label><input type="checkbox" id="harm" checked> harmonics</label>
+      <button id="undoBtn">Undo</button>
+      <span class="spacer"></span>
+      <button id="vocodeBtn">Vocode</button>
+    </div>
+    <div id="wrap"><canvas id="axis" width="48"></canvas><div id="scroll"><canvas id="spec" width="600" height="320"></canvas></div></div>
+    <div id="readout"></div>
+    <div class="result" id="origRow" hidden><label>original <audio id="origAudio" controls></audio></label></div>
+  </section>
+</main>
+
+
+<script>
+const PXW = 3, PXH = 4, VMAX = 1.0;  // one frame = 3 px, one mel bin = 4 px
+const BRUSH = 3, LEVEL = 0.8;
+let info = null, nMels = 80, frames = 0, data = null, undo = [], exampleIdx = 0, mode = "paint";
+const $ = id => document.getElementById(id);
+const spec = $("spec"), sctx = spec.getContext("2d"), axis = $("axis"), actx = axis.getContext("2d");
+
+function msg(text, err = false) { $("msg").textContent = text; $("msg").className = err ? "err" : ""; }
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { let e = r.statusText; try { e = (await r.json()).error; } catch {} throw new Error(e); }
+  return r;
+}
+const postJSON = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+// ---- colour map: near black -> deep red -> red -> warm near white ----
+const STOPS = [[0, [20, 20, 20]], [0.35, [78, 20, 22]], [0.6, [184, 44, 40]], [0.82, [232, 112, 88]], [1, [248, 230, 220]]];
+const LUT = [];
+for (let i = 0; i < 256; i++) {
+  const t = i / 255; let k = 0; while (k < STOPS.length - 2 && t > STOPS[k + 1][0]) k++;
+  const [t0, c0] = STOPS[k], [t1, c1] = STOPS[k + 1], u = (t - t0) / (t1 - t0);
+  LUT.push(c0.map((c, j) => Math.round(c + (c1[j] - c) * u)));
+}
+
+// ---- spectrogram ----
+function pushUndo() { if (data) { undo.push({ frames, data: data.slice() }); if (undo.length > 40) undo.shift(); } }
+function setMel(j) {
+  pushUndo();
+  nMels = j.n_mels; frames = j.frames; data = Float32Array.from(j.mel);
+  spec.width = frames * PXW; spec.height = nMels * PXH; axis.height = spec.height;
+  drawAxis(); draw();
+  $("readout").textContent = `${(frames * info.hop / info.sample_rate).toFixed(2)} s`;
+}
+let drawQueued = false;
+function draw() {
+  if (drawQueued) return; drawQueued = true;
+  requestAnimationFrame(() => {
+    drawQueued = false; if (!data) return;
+    const img = sctx.createImageData(spec.width, spec.height), px = img.data, W = spec.width;
+    for (let m = 0; m < nMels; m++) {
+      const y0 = (nMels - 1 - m) * PXH;
+      for (let f = 0; f < frames; f++) {
+        const t = Math.max(0, Math.min(1, (data[m * frames + f] - info.floor) / (VMAX - info.floor)));
+        const c = LUT[Math.round(t * 255)];
+        for (let dy = 0; dy < PXH; dy++) for (let dx = 0; dx < PXW; dx++) {
+          const p = ((y0 + dy) * W + f * PXW + dx) * 4;
+          px[p] = c[0]; px[p + 1] = c[1]; px[p + 2] = c[2]; px[p + 3] = 255;
+        }
+      }
+    }
+    sctx.putImageData(img, 0, 0);
+  });
+}
+function drawAxis() {
+  actx.fillStyle = "#141414"; actx.fillRect(0, 0, axis.width, axis.height);
+  actx.fillStyle = "#a6a6a2"; actx.font = "11px 'Instrument Sans', system-ui"; actx.textAlign = "right";
+  for (const hz of [250, 500, 1000, 2000, 4000, 8000]) {
+    const m = binForHz(hz); if (m < 0) continue;
+    const y = (nMels - 1 - m) * PXH + PXH / 2;
+    actx.fillText(hz >= 1000 ? `${hz / 1000}k` : `${hz}`, axis.width - 8, y + 4);
+  }
+}
+function binForHz(hz) {
+  const b = info.bins_hz; if (hz > b[b.length - 1] * 1.01) return -1;
+  let best = 0; for (let i = 1; i < b.length; i++) if (Math.abs(b[i] - hz) < Math.abs(b[best] - hz)) best = i;
+  return best;
+}
+function hzForBin(m) {
+  const b = info.bins_hz, i = Math.max(0, Math.min(b.length - 2, Math.floor(m)));
+  return b[i] + (b[i + 1] - b[i]) * (m - i);
+}
+
+// ---- painting ----
+function stamp(fc, mc, radius, target) {
+  const r = Math.ceil(radius * 1.5), s2 = 2 * (radius / 1.5) ** 2;
+  for (let m = Math.max(0, Math.floor(mc - r)); m <= Math.min(nMels - 1, Math.ceil(mc + r)); m++)
+    for (let f = Math.max(0, Math.floor(fc - r)); f <= Math.min(frames - 1, Math.ceil(fc + r)); f++) {
+      const w = Math.exp(-((f - fc) ** 2 + ((m - mc) * 1.3) ** 2) / s2);
+      if (w < 0.02) continue;
+      const i = m * frames + f;
+      if (mode === "erase") data[i] += (info.floor - data[i]) * w;
+      else data[i] = Math.max(data[i], info.floor + (target - info.floor) * w);
+    }
+}
+function paintAt(ev) {
+  const rect = spec.getBoundingClientRect();
+  const f = (ev.clientX - rect.left) / PXW, m = nMels - 1 - (ev.clientY - rect.top) / PXH + 0.5;
+  const target = info.floor + (VMAX - info.floor) * LEVEL;
+  stamp(f, m, BRUSH, target);
+  if ($("harm").checked && mode === "paint") {
+    const f0 = hzForBin(Math.max(0, m));
+    for (let k = 2; k <= 12; k++) {
+      const mk = binForHz(f0 * k); if (mk < 0) break;
+      stamp(f, mk, Math.max(1, BRUSH * 0.7), target - 0.6 * (k - 1));
+    }
+  }
+  draw();
+}
+let painting = false, last = null;
+spec.addEventListener("pointerdown", ev => { if (!data) return; painting = true; pushUndo(); spec.setPointerCapture(ev.pointerId); last = ev; paintAt(ev); });
+spec.addEventListener("pointermove", ev => {
+  if (data && info) {
+    const rect = spec.getBoundingClientRect(), f = (ev.clientX - rect.left) / PXW, m = nMels - 1 - (ev.clientY - rect.top) / PXH;
+    $("readout").textContent = `${(f * info.hop / info.sample_rate).toFixed(2)} s · ≈ ${Math.round(hzForBin(Math.max(0, m)))} Hz`;
+  }
+  if (!painting) return;
+  const steps = Math.max(1, Math.ceil(Math.hypot(ev.clientX - last.clientX, ev.clientY - last.clientY) / 3));
+  for (let s = 1; s <= steps; s++)
+    paintAt({ clientX: last.clientX + (ev.clientX - last.clientX) * s / steps, clientY: last.clientY + (ev.clientY - last.clientY) * s / steps });
+  last = ev;
+});
+["pointerup", "pointercancel"].forEach(t => spec.addEventListener(t, () => painting = false));
+$("undoBtn").onclick = () => {
+  const u = undo.pop(); if (!u) return;
+  frames = u.frames; data = u.data; spec.width = frames * PXW; draw();
+};
+$("paintBtn").onclick = () => { mode = "paint"; $("paintBtn").classList.add("on"); $("eraseBtn").classList.remove("on"); };
+$("eraseBtn").onclick = () => { mode = "erase"; $("eraseBtn").classList.add("on"); $("paintBtn").classList.remove("on"); };
+
+// ---- vocoding ----
+function play(blob) {
+  const url = URL.createObjectURL(blob);
+  $("outAudio").src = url; $("outAudio").play();
+  $("dl").href = url; $("dl").hidden = false;
+}
+async function vocode() {
+  const r = await postJSON("/api/vocode", { frames, mel: Array.from(data) });
+  play(await r.blob());
+}
+$("vocodeBtn").onclick = async () => {
+  if (!data) return msg("record, load or paint something first", true);
+  const btn = $("vocodeBtn"); btn.disabled = true; msg("vocoding…");
+  try { await vocode(); msg("vocoded: the result is in the player above"); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  catch (e) { msg(e.message, true); }
+  btn.disabled = false;
+};
+
+// ---- text to speech ----
+$("ttsSpeed").oninput = () => $("speedV").textContent = (+$("ttsSpeed").value).toFixed(2) + "×";
+$("speakBtn").onclick = async () => {
+  const text = $("ttsText").value.trim();
+  if (!text) return msg("type some text first", true);
+  const btn = $("speakBtn"); btn.disabled = true; msg("speaking…");
+  try {
+    const r = await postJSON("/api/tts", { text, speed: +$("ttsSpeed").value });
+    setMel(await r.json()); $("origRow").hidden = true;
+    await vocode();
+    msg("");
+  } catch (e) { msg(e.message, true); }
+  btn.disabled = false;
+};
+$("ttsText").addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) $("speakBtn").click(); });
+
+// ---- sources ----
+let rec = null;
+$("recBtn").onclick = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    const ctx = new AudioContext(), src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+    proc.onaudioprocess = e => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(proc); proc.connect(ctx.destination);
+    rec = { stream, ctx, src, proc, chunks };
+    $("recBtn").disabled = true; $("stopBtn").disabled = false; msg("recording… press Stop when done (max 20 s)");
+    rec.timer = setTimeout(() => $("stopBtn").click(), 20000);
+  } catch (e) { msg("microphone not available: " + e.message, true); }
+};
+$("stopBtn").onclick = async () => {
+  if (!rec) return;
+  clearTimeout(rec.timer);
+  rec.proc.disconnect(); rec.src.disconnect(); rec.stream.getTracks().forEach(t => t.stop());
+  const sr = rec.ctx.sampleRate; await rec.ctx.close();
+  const n = rec.chunks.reduce((a, c) => a + c.length, 0), audio = new Float32Array(n);
+  let o = 0; for (const c of rec.chunks) { audio.set(c, o); o += c.length; }
+  rec = null; $("recBtn").disabled = false; $("stopBtn").disabled = true;
+  try {
+    $("origAudio").src = URL.createObjectURL(new Blob([encodeWav(audio, sr)], { type: "audio/wav" })); $("origRow").hidden = false;
+    const r = await api(`/api/mel?sr=${sr}`, { method: "POST", body: audio.buffer });
+    setMel(await r.json()); msg("recording loaded: paint on it or press Vocode");
+  } catch (e) { msg(e.message, true); }
+};
+$("exampleBtn").onclick = async () => {
+  try {
+    const i = exampleIdx++;
+    setMel(await (await api(`/api/example?i=${i}`)).json());
+    $("origAudio").src = `/api/example_wav?i=${i}`; $("origRow").hidden = false;
+    msg("held-out LJSpeech recording loaded: press Vocode to hear the vocoder's version");
+  } catch (e) { msg(e.message, true); }
+};
+$("blankBtn").onclick = () => {
+  const f = Math.round(3 * info.sample_rate / info.hop);
+  setMel({ n_mels: info.n_mels, frames: f, mel: new Array(info.n_mels * f).fill(info.floor) });
+  $("origRow").hidden = true;
+};
+function encodeWav(samples, sr) {
+  const buf = new ArrayBuffer(44 + samples.length * 2), v = new DataView(buf);
+  const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); w(8, "WAVEfmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, "data"); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 32767, true);
+  return buf;
+}
+
+(async () => {
+  info = await (await api("/api/info")).json();
+  $("blankBtn").click();
+})();
+</script>
+</body>
+</html>
