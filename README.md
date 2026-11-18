@@ -18,6 +18,11 @@ It includes a local web app for typing text and hearing it, and for recording, l
 
 Both models are trained from random initialization: no pretrained weights, no external aligner, no phonemizer.
 
+### The trained models
+
+- **Vocoder:** trained on a 10-hour subset of LJSpeech (`prepare_data.py --max-hours 10`).
+- **Text to mel:** trained on the same 10-hour subset first, then continued on the full dataset (about 24 hours). Training was stopped early, once the validation losses stopped improving. That means fewer training steps, not less data: every batch is drawn from the whole training split, so the model saw all of it many times over.
+
 The text-to-mel model reads characters directly. It learns how spelling maps to sound from the data alone, so it handles most common irregular words ("though", "through", "thought"). It doesn't reliably handle homographs or rare spellings, though (see [Limitations](#limitations)).
 
 ## Quick start
@@ -28,7 +33,7 @@ Requirements: Python 3.10, PyTorch 2.3 with CUDA, torchaudio and numba. A CPU wo
 pip install -r requirements.txt
 ```
 
-The trained checkpoints are not part of the repository. To use the app, train the models first (see [Training](#training)), or put checkpoints at `runs/gan/latest.pt` and `runs/tts/latest.pt`. Then:
+The two trained checkpoints are included in the repository: `runs/gan/latest.pt` (vocoder, 56 MB) and `runs/tts/latest.pt` (text to mel, 61 MB). The app uses them by default, so it runs straight after cloning:
 
 ```bash
 python scripts/app.py          # opens http://localhost:8765

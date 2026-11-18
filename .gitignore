@@ -3,8 +3,16 @@ __pycache__/
 .pytest_cache/
 data/
 data_*/
-runs/
 *.pt
 *.wav
 *.bin
 *.npy
+
+# training runs are ignored, except the two released checkpoints
+runs/*
+!runs/gan/
+!runs/tts/
+runs/gan/*
+runs/tts/*
+!runs/gan/latest.pt
+!runs/tts/latest.pt
