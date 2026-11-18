@@ -1,97 +1,149 @@
 # tts-LJ
 
-A text-to-speech system trained **from scratch** on a laptop GPU (RTX 4060, 8 GB), in two models:
+A text-to-speech system trained from scratch on [LJSpeech](https://keithito.com/LJ-Speech-Dataset/), on a single laptop GPU (RTX 4060, 8 GB), in about eight hours of training in total.
 
-- **Text to mel:** a Matcha-TTS-style model (15.2M params).
-  - Input is characters, with a blank token between each.
-  - A transformer encoder with RoPE predicts a mean mel and a duration per token.
-  - The alignment between text and audio is learned with monotonic alignment search, so no external aligner is needed.
-  - A flow-matching decoder turns noise (temperature 0.3) into the mel in 20 Euler steps.
-- **Mel to audio:** a HiFi-GAN vocoder.
-  - Generator: v1 preset, 13.9M params.
-  - Discriminators: half-width multi-period plus multi-resolution STFT.
-
-Both work on 16 kHz audio with 80-band log-mel spectrograms (hop 256, FFT 1024).
-
-## The models
-
-| Model | Checkpoint | Data | Training | Final step |
-|---|---|---|---|---|
-| Vocoder | `runs/gan_v1/latest.pt` | LJSpeech, 10 h | 6 h | 67,106 (val log-mel distance 0.208) |
-| Text to mel | `runs/tts_full/latest.pt` | LJSpeech, 10 h, then all 24 h | 0.8 h + 1.2 h | 61,007 |
-
-`data/` and `runs/` are gitignored.
-
-## Web app
-
-```bash
-conda activate torch-gpu
-python scripts/app.py          # http://localhost:8765
+```
+text ──► text to mel ──► 80-band log-mel spectrogram ──► vocoder ──► 16 kHz audio
+         (flow matching, 15.2M)                          (HiFi-GAN, 13.9M)
 ```
 
-- **Text to speech:** type text, set the speed, and press Speak. You can play and download the result.
-- **Spectrogram:** shows the mel the vocoder hears. It can come from a microphone recording, a held-out LJSpeech recording, or a blank canvas.
-- **Painting:** paint or erase on the spectrogram. "Harmonics" also paints the overtones of the pitch you draw. Then press Vocode.
+It includes a local web app for typing text and hearing it, and for recording, loading or painting a spectrogram and hearing what the vocoder makes of it.
 
-The app reloads a checkpoint whenever training saves a new one, so it can be used during training.
+## Models
 
-## Reproducing the models
+| Stage | Architecture | Parameters | Training data | Training time |
+|---|---|---|---|---|
+| Text to mel | Matcha-TTS style: transformer encoder, monotonic alignment search, flow-matching decoder | 15.2M | 10 h, then the full 24 h of LJSpeech | 0.8 h + 1.2 h |
+| Mel to audio | HiFi-GAN V1 generator, multi-period + multi-resolution discriminators | 13.9M (+ 10.6M discriminators) | 10 h of LJSpeech | 6 h |
 
-Use the `torch-gpu` conda environment (PyTorch 2.3 + CUDA 12.1, torchaudio, numba; see `requirements.txt`).
+Both models are trained from random initialization: no pretrained weights, no external aligner, no phonemizer.
 
-`prepare_data.py --download` streams LJSpeech and decompresses it on the fly; the 2.6 GB archive is never saved to disk. Audio is stored once as 16 kHz int16, about 115 MB per hour, together with the transcripts.
+The text-to-mel model reads characters directly. It learns how spelling maps to sound from the data alone, so it handles most common irregular words ("though", "through", "thought"). It doesn't reliably handle homographs or rare spellings, though (see [Limitations](#limitations)).
+
+## Quick start
+
+Requirements: Python 3.10, PyTorch 2.3 with CUDA, torchaudio and numba. A CPU works for inference, but is slow for training.
 
 ```bash
-# 1. the 10 h subset (~1.2 GB); both models start here
+pip install -r requirements.txt
+```
+
+The trained checkpoints are not part of the repository. To use the app, train the models first (next section), or put checkpoints at `runs/gan_v1/latest.pt` and `runs/tts_full/latest.pt`. Then:
+
+```bash
+python scripts/app.py          # opens http://localhost:8765
+```
+
+- **Text to speech:** type text, set the speed, press **Speak**, then play or download the WAV.
+- **Spectrogram:** shows the mel spectrogram the vocoder receives. You can also record from the microphone, load a held-out LJSpeech recording (**Example**), or start from a **Blank** canvas.
+- **Paint and erase:** draw on the spectrogram and press **Vocode** to hear the result. With **harmonics** on, the brush also paints the overtones of the pitch you draw, so low lines sound voice-like rather than like pure tones.
+
+The app reloads a checkpoint whenever training saves a new one, so it can be used while a model trains.
+
+## Training from scratch
+
+Data preparation streams LJSpeech and decompresses it on the fly; the 2.6 GB archive is never written to disk. Audio is stored once as 16 kHz int16, about 115 MB per hour, together with the transcripts. Mel spectrograms are computed on the GPU during training.
+
+This is the exact recipe for the two models above:
+
+```bash
+# 1. a 10-hour subset (~1.2 GB): both models start on it
 python scripts/prepare_data.py --download --max-hours 10 --data-dir data_10h
 
-# 2. vocoder: 6 h (20 min mel-only warm-up, then adversarial training)
+# 2. vocoder: 6 hours (20 minutes of mel-only warm-up, then adversarial training)
 python scripts/train_gan.py --hours 6 --data-dir data_10h --out runs/gan_v1
 
-# 3. text to mel, first stage on 10 h
-python scripts/train_tts.py --hours 0.83 --eval-minutes 10 --workers 1 --data-dir data_10h --out runs/tts_10h
+# 3. text to mel, first stage on the 10-hour subset
+python scripts/train_tts.py --hours 0.83 --eval-minutes 10 --data-dir data_10h --out runs/tts_10h
 
-# 4. the full 24 h (~2.7 GB), then continue the text-to-mel model on it
+# 4. the full dataset (~2.7 GB), then continue text to mel on it
 python scripts/prepare_data.py --download
-python scripts/train_tts.py --init runs/tts_10h/latest.pt --hours 2.83 --eval-minutes 10 --workers 1 --out runs/tts_full
+python scripts/train_tts.py --init runs/tts_10h/latest.pt --hours 2.83 --eval-minutes 10 --out runs/tts_full
 ```
 
-- **`--hours` is a total:** it includes the time already trained, and the learning rate follows a cosine curve over it.
-- **`--init`** continues from a checkpoint's weights with a fresh optimizer.
-- **The released checkpoints:**
-  - The first text-to-mel stage stopped at 50 minutes, step 25,279 (it crashed once, and the run was continued with `--init`).
-  - The second stage was stopped by hand at 2.0 h, step 61,007, once validation losses had stopped improving.
-  - The vocoder ran its full 6 h.
-- **Resuming:** `--resume` continues an interrupted run from its `resume.pt`. The vocoder writes `resume.pt` hourly, the text-to-mel model every 20 minutes.
+- **Budgets:** training runs under a **wall-clock budget**. `--hours` counts the total training time of a run, including time from `--init` or `--resume`, and the learning rate follows a cosine schedule over it.
+- **Checkpoints:** every `--eval-minutes`, each script scores held-out clips, writes audio samples to `runs/<name>/samples/`, and saves weights-only checkpoints: `latest.pt`, and `best.pt` for the best validation score.
+- **Resuming:** the full training state goes to `resume.pt` (hourly for the vocoder, every 20 minutes for text to mel), and `--resume` continues an interrupted run.
+- **The released checkpoints:** the text-to-mel model stopped early, by hand, at step 25,279 in stage 3 and at step 61,007 in stage 4, once validation losses had flattened. The vocoder ran its full 6 hours, 67,106 steps.
 
-**Measured speed:**
+Measured on an RTX 4060 Laptop GPU with bf16 autocast:
 
-| Model | Batch | Steps/s | GPU memory |
+| Run | Batch | Steps/s | GPU memory |
 |---|---|---|---|
-| Vocoder, mel-only warm-up | 16 | ~70 | 1.4 GB |
-| Vocoder, adversarial | 16 | ~2.7–3.1 | 3.4 GB |
-| Text to mel (base) | 32 | ~8.3 | 1.9 GB |
+| Vocoder, mel-only warm-up | 16 × 0.5 s | ~70 | 1.4 GB |
+| Vocoder, adversarial | 16 × 0.5 s | ~2.7–3.1 | 3.4 GB |
+| Text to mel | 32 utterances | ~8.3 | 1.9 GB |
 
-## Design notes
+Any folder of 16-bit WAV files can be used instead of LJSpeech (`prepare_data.py --wav-dir`). Text-to-mel training also needs transcripts, which are only extracted for LJSpeech-style archives.
 
-- **Vocoder warm-up.** For the first 20 minutes (`--mel-only-minutes`), the generator learns from mel L1 only. That makes output intelligible quickly; then the discriminators switch on.
-  - `best.pt` only considers adversarial-phase checkpoints, because mel-only checkpoints score well but sound robotic.
-- **EMA and learning rate.** Saved weights are an exponential moving average (`--ema 0.999`). The learning rate decays on a cosine curve over the time budget, down to 10%.
-- **Weight norm everywhere.** PyTorch's spectral-norm parametrization fails under bf16 autocast, so the discriminators use weight norm.
-- **Text-to-mel training.**
-  - Batches are grouped by length, so little time goes on padding.
-  - The decoder trains on random 2-second crops.
-  - Pinned memory is off, because variable batch shapes made the pinned-memory cache grow until Windows ran out of commit memory.
-- **Characters, not phonemes.** The model learns spelling-to-sound from data. It handles common irregular words, but not every homograph.
+## How it works
 
-## Tests
+### Text to mel
+
+The model follows [Matcha-TTS](https://arxiv.org/abs/2309.03199):
+
+- **Input:** lowercase characters and punctuation, with a blank token between every pair of characters, as in Glow-TTS.
+- **Encoder:** a convolutional prenet, then 6 transformer blocks (192 channels, rotary position embeddings, convolutional feed-forward). For every token it predicts a mean mel frame and a duration.
+- **Alignment:** at every training step, [monotonic alignment search](https://arxiv.org/abs/2005.11129) finds the most likely alignment between tokens and the target mel frames. It runs in numba on the CPU. The duration predictor learns the resulting durations, so no external aligner is needed.
+- **Decoder:** conditional flow matching. It learns the velocity along a straight path from noise to the mel, conditioned on the encoder's means expanded to frame rate. It has residual convolution blocks and transformer blocks (256 channels), and trains on random 2-second crops.
+- **Losses:** prior (mel against the expanded means), duration, and flow matching.
+- **Inference:** 20 Euler steps from noise at temperature 0.3.
+
+### Vocoder
+
+The vocoder follows [HiFi-GAN](https://arxiv.org/abs/2010.05646):
+
+- **Generator:** the V1 configuration. It upsamples by 8 × 8 × 2 × 2 = 256, the mel hop size, and uses multi-receptive-field residual blocks.
+- **Discriminators:** the five HiFi-GAN period discriminators at half width, plus three [UnivNet](https://arxiv.org/abs/2106.07889)-style multi-resolution STFT discriminators (FFT sizes 512, 1024 and 2048). They take about half the compute of the original multi-scale set.
+- **Losses:** least-squares adversarial loss, feature matching, and mel L1 (weight 45).
+- **Warm-up:** the first 20 minutes train on mel L1 only, which makes output intelligible quickly before the adversarial phase.
+- **Training tricks:** EMA weights (0.999), bf16 autocast, and weight norm throughout. PyTorch's spectral-norm parametrization fails under bf16.
+
+### Audio features
+
+- 16 kHz audio, 1024-point FFT, hop 256 (16 ms), 80 Slaney mel bands from 0 to 8 kHz.
+- Natural-log magnitudes, clamped at 1e-5.
+- Frames are exactly `samples // 256`.
+
+## Limitations
+
+- **One voice.** LJSpeech is a single female speaker reading non-fiction, so that's the only voice and style.
+- **Characters only.** There is no text normalization: digits are dropped and abbreviations are read as written, so write "forty two" and "Doctor". Other languages are read with English spelling rules.
+- **Homographs.** The model mostly doesn't use context to choose a pronunciation. It reads "read" as "red" except directly after "to", and always reads "lead" as "leed". LJSpeech has only a few dozen examples of each, and the model learned the simplest pattern they support.
+- **Rare words.** Words seen once or never ("tough", "plough") are often mispronounced.
+- **Length.** The app caps output at 20 seconds.
+
+## Repository layout
+
+```
+tms/            model code
+  tts.py          text to mel: text processing, encoder, alignment search, flow-matching decoder
+  gan.py          vocoder: generator, discriminators, losses
+  audio.py        log-mel features, WAV input/output, resampling
+  data.py         memory-mapped dataset, length-bucketed batches
+  common.py       checkpoint loading and shared helpers
+  app/index.html  the web app's page
+scripts/
+  prepare_data.py  download LJSpeech (or read a WAV folder) into data/
+  train_gan.py     train the vocoder
+  train_tts.py     train the text-to-mel model
+  app.py           the web app server (no web framework needed)
+tests/           shapes, alignment search, data preparation, short training runs
+```
 
 ```bash
 python -m pytest -q tests
 ```
 
-The tests cover:
-- tensor shapes;
-- the alignment search, checked against brute force;
-- data preparation;
-- training, saving and resuming both models for a few steps on a tiny synthetic dataset.
+## References
+
+- Mehta et al., [Matcha-TTS: A fast TTS architecture with conditional flow matching](https://arxiv.org/abs/2309.03199), 2024.
+- Kim et al., [Glow-TTS: A Generative Flow for Text-to-Speech via Monotonic Alignment Search](https://arxiv.org/abs/2005.11129), 2020.
+- Lipman et al., [Flow Matching for Generative Modeling](https://arxiv.org/abs/2210.02747), 2023.
+- Kong et al., [HiFi-GAN: Generative Adversarial Networks for Efficient and High Fidelity Speech Synthesis](https://arxiv.org/abs/2010.05646), 2020.
+- Jang et al., [UnivNet: A Neural Vocoder with Multi-Resolution Spectrogram Discriminators](https://arxiv.org/abs/2106.07889), 2021.
+- Ito & Johnson, [The LJ Speech Dataset](https://keithito.com/LJ-Speech-Dataset/), 2017 (public domain).
+
+## License
+
+The code is released under the [MIT License](LICENSE). LJSpeech, which the models are trained on, is in the public domain.
