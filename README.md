@@ -1,6 +1,6 @@
 # tts-LJ
 
-A text-to-speech system trained from scratch on [LJSpeech](https://keithito.com/LJ-Speech-Dataset/), on a single laptop GPU (RTX 4060, 8 GB), in about eight hours of training in total.
+A text-to-speech system trained from scratch on [LJSpeech](https://keithito.com/LJ-Speech-Dataset/), on a single laptop GPU (RTX 4060, 8 GB).
 
 ```
 text ──► text to mel ──► 80-band log-mel spectrogram ──► vocoder ──► 16 kHz audio
@@ -11,10 +11,10 @@ It includes a local web app for typing text and hearing it, and for recording, l
 
 ## Models
 
-| Stage | Architecture | Parameters | Training data | Training time |
-|---|---|---|---|---|
-| Text to mel | Matcha-TTS style: transformer encoder, monotonic alignment search, flow-matching decoder | 15.2M | 10 h, then the full 24 h of LJSpeech | 0.8 h + 1.2 h |
-| Mel to audio | HiFi-GAN V1 generator, multi-period + multi-resolution discriminators | 13.9M (+ 10.6M discriminators) | 10 h of LJSpeech | 6 h |
+| Stage | Architecture | Parameters | Training data |
+|---|---|---|---|
+| Text to mel | Matcha-TTS style: transformer encoder, monotonic alignment search, flow-matching decoder | 15.2M | 24 h of LJSpeech (a 10 h subset first, then all of it) |
+| Mel to audio | HiFi-GAN V1 generator, multi-period + multi-resolution discriminators | 13.9M | 10 h of LJSpeech |
 
 Both models are trained from random initialization: no pretrained weights, no external aligner, no phonemizer.
 
