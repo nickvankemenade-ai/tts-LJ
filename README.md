@@ -18,6 +18,11 @@ It includes a local web app for typing text and hearing it, and for recording, l
 
 Both models are trained from random initialization: no pretrained weights, no external aligner, no phonemizer.
 
+### The trained models
+
+- **Vocoder:** trained on a 10-hour subset of LJSpeech (`prepare_data.py --max-hours 10`).
+- **Text to mel:** trained on the same 10-hour subset first, then continued on the full dataset (about 24 hours). Training was stopped early, once the validation losses stopped improving. That means fewer training steps, not less data: every batch is drawn from the whole training split, so the model saw all of it many times over.
+
 The text-to-mel model reads characters directly. It learns how spelling maps to sound from the data alone, so it handles most common irregular words ("though", "through", "thought"). It doesn't reliably handle homographs or rare spellings, though (see [Limitations](#limitations)).
 
 ## Quick start
