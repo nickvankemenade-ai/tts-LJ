@@ -44,7 +44,7 @@ The app reloads a checkpoint whenever training saves a new one, so it can be use
 
 Data preparation streams LJSpeech and decompresses it on the fly; the 2.6 GB archive is never written to disk. Audio is stored once as 16 kHz int16, about 115 MB per hour, together with the transcripts. Mel spectrograms are computed on the GPU during training.
 
-This is the exact recipe for the two models above:
+This is the recipe for the two models above:
 
 ```bash
 # 1. a 10-hour subset (~1.2 GB): both models start on it
@@ -64,7 +64,6 @@ python scripts/train_tts.py --init runs/tts_10h/latest.pt --hours 2.83 --eval-mi
 - **Budgets:** training runs under a **wall-clock budget**. `--hours` counts the total training time of a run, including time from `--init` or `--resume`, and the learning rate follows a cosine schedule over it.
 - **Checkpoints:** every `--eval-minutes`, each script scores held-out clips, writes audio samples to `runs/<name>/samples/`, and saves weights-only checkpoints: `latest.pt`, and `best.pt` for the best validation score.
 - **Resuming:** the full training state goes to `resume.pt` (hourly for the vocoder, every 20 minutes for text to mel), and `--resume` continues an interrupted run.
-- **The released checkpoints:** the text-to-mel model stopped early, by hand, at step 25,279 in stage 3 and at step 61,007 in stage 4, once validation losses had flattened. The vocoder ran its full 6 hours, 67,106 steps.
 
 Measured on an RTX 4060 Laptop GPU with bf16 autocast:
 
