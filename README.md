@@ -11,10 +11,10 @@ It includes a local web app for typing text and hearing it, and for recording, l
 
 ## Models
 
-| Stage | Architecture | Parameters | Training data |
-|---|---|---|---|
-| Text to mel | Matcha-TTS style: transformer encoder, monotonic alignment search, flow-matching decoder | 15.2M | 24 h of LJSpeech (a 10 h subset first, then all of it) |
-| Mel to audio | HiFi-GAN V1 generator, multi-period + multi-resolution discriminators | 13.9M | 10 h of LJSpeech |
+| Stage | Architecture | Parameters |
+|---|---|---|
+| Text to mel | Matcha-TTS style: transformer encoder, monotonic alignment search, flow-matching decoder | 15.2M |
+| Mel to audio | HiFi-GAN V1 generator, multi-period + multi-resolution discriminators | 13.9M |
 
 Both models are trained from random initialization: no pretrained weights, no external aligner, no phonemizer.
 
@@ -28,7 +28,7 @@ Requirements: Python 3.10, PyTorch 2.3 with CUDA, torchaudio and numba. A CPU wo
 pip install -r requirements.txt
 ```
 
-The trained checkpoints are not part of the repository. To use the app, train the models first (next section), or put checkpoints at `runs/gan_v1/latest.pt` and `runs/tts_full/latest.pt`. Then:
+The trained checkpoints are not part of the repository. To use the app, train the models first (see [Training](#training)), or put checkpoints at `runs/gan/latest.pt` and `runs/tts/latest.pt`. Then:
 
 ```bash
 python scripts/app.py          # opens http://localhost:8765
@@ -40,28 +40,46 @@ python scripts/app.py          # opens http://localhost:8765
 
 The app reloads a checkpoint whenever training saves a new one, so it can be used while a model trains.
 
-## Training from scratch
+## Data
 
-Data preparation streams LJSpeech and decompresses it on the fly; the 2.6 GB archive is never written to disk. Audio is stored once as 16 kHz int16, about 115 MB per hour, together with the transcripts. Mel spectrograms are computed on the GPU during training.
+`scripts/prepare_data.py` builds `data/` from one of three sources:
+- `--download`: LJSpeech 1.1, streamed and decompressed on the fly. The 2.6 GB archive is never written to disk.
+- `--archive PATH`: an LJSpeech-style `.tar.bz2` or `.tar.gz` you already have.
+- `--wav-dir PATH`: a folder of 16-bit WAV files, any sample rate.
 
-This is the recipe for the two models above:
+Audio is resampled to 16 kHz and stored once as int16, about 115 MB per hour: `train.bin` and `val.bin`, plus an index. Mel spectrograms are computed on the GPU during training.
+
+**Splits.**
+- **Validation:** a clip goes to validation if the MD5 hash of its file name falls in the lowest `--val-percent` (default 1%), until there are `--max-val` (default 100) validation clips.
+- **Training:** every other clip.
+- **Stable:** the split depends only on file names, so it's the same on every run. For the full LJSpeech that gives 100 validation and 13,000 training clips (23.7 h).
+
+**Capping.** `--max-hours` caps the training audio. Clips are taken in archive order until the cap is reached.
+- With `--download` or `--archive`, preparation stops there, so the validation split only holds the validation clips that came before the cap.
+- With `--wav-dir`, it keeps reading to fill the validation split.
+
+**Transcripts.** For archives, the normalized text from `metadata.csv` is saved to `transcripts.json`, in the same order as the clips. `--wav-dir` gives audio only, which is enough for the vocoder but not for text to mel.
+
+**How each script uses the splits:**
+
+| Script | Training | Validation |
+|---|---|---|
+| `train_gan.py` | random 0.5 s segments (`--segment 8192` samples) from training clips at least that long | the first 20 validation clips (`--val-clips`), cut to 4 s; score: log-mel L1 between each clip and its resynthesis |
+| `train_tts.py` | training clips up to 12 s that have at least as many mel frames as text tokens | validation clips that pass the same length filter; scores: prior, duration and flow-matching losses, with a fixed noise seed |
+| `app.py` | | the **Example** button plays validation clips, cut to 6 s |
+
+## Training
 
 ```bash
-# 1. a 10-hour subset (~1.2 GB): both models start on it
-python scripts/prepare_data.py --download --max-hours 10 --data-dir data_10h
-
-# 2. vocoder: 6 hours (20 minutes of mel-only warm-up, then adversarial training)
-python scripts/train_gan.py --hours 6 --data-dir data_10h --out runs/gan_v1
-
-# 3. text to mel, first stage on the 10-hour subset
-python scripts/train_tts.py --hours 0.83 --eval-minutes 10 --data-dir data_10h --out runs/tts_10h
-
-# 4. the full dataset (~2.7 GB), then continue text to mel on it
-python scripts/prepare_data.py --download
-python scripts/train_tts.py --init runs/tts_10h/latest.pt --hours 2.83 --eval-minutes 10 --out runs/tts_full
+python scripts/prepare_data.py --download     # full LJSpeech, ~2.7 GB in data/
+python scripts/train_gan.py --hours 6         # vocoder, saves to runs/gan/
+python scripts/train_tts.py --hours 2         # text to mel, saves to runs/tts/
 ```
 
+The two models train independently and can run one after the other or in parallel. `train_tts.py` uses the vocoder in `runs/gan/latest.pt`, if it exists, only to turn its evaluation samples into audio.
+
 - **Budgets:** training runs under a **wall-clock budget**. `--hours` counts the total training time of a run, including time from `--init` or `--resume`, and the learning rate follows a cosine schedule over it.
+- **`--init PATH`:** starts text-to-mel training from another checkpoint's weights, with a fresh optimizer.
 - **Checkpoints:** every `--eval-minutes`, each script scores held-out clips, writes audio samples to `runs/<name>/samples/`, and saves weights-only checkpoints: `latest.pt`, and `best.pt` for the best validation score.
 - **Resuming:** the full training state goes to `resume.pt` (hourly for the vocoder, every 20 minutes for text to mel), and `--resume` continues an interrupted run.
 
@@ -72,8 +90,6 @@ Measured on an RTX 4060 Laptop GPU with bf16 autocast:
 | Vocoder, mel-only warm-up | 16 × 0.5 s | ~70 | 1.4 GB |
 | Vocoder, adversarial | 16 × 0.5 s | ~2.7–3.1 | 3.4 GB |
 | Text to mel | 32 utterances | ~8.3 | 1.9 GB |
-
-Any folder of 16-bit WAV files can be used instead of LJSpeech (`prepare_data.py --wav-dir`). Text-to-mel training also needs transcripts, which are only extracted for LJSpeech-style archives.
 
 ## How it works
 

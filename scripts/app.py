@@ -2,7 +2,7 @@
 
   python scripts/app.py          # http://localhost:8765
 
-Uses runs/tts_full/latest.pt (text to mel) and runs/gan_v1/latest.pt (vocoder) by default.
+Uses runs/tts/latest.pt (text to mel) and runs/gan/latest.pt (vocoder) by default.
 Both are reloaded automatically when training saves a new checkpoint, so the app can be used
 while a model trains. Uses only the standard library plus the repo's own dependencies.
 """
@@ -160,8 +160,8 @@ def make_handler(voc: Reloading, tts: Reloading, melfn: LogMel, data_dir: Path):
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     runs = DEFAULT_WORK_DIR / "runs"
-    p.add_argument("--vocoder", type=Path, default=runs / "gan_v1" / "latest.pt")
-    p.add_argument("--tts", type=Path, default=runs / "tts_full" / "latest.pt")
+    p.add_argument("--vocoder", type=Path, default=runs / "gan" / "latest.pt")
+    p.add_argument("--tts", type=Path, default=runs / "tts" / "latest.pt")
     p.add_argument("--data-dir", type=Path, default=DEFAULT_WORK_DIR / "data", help="for the example recordings")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--cpu", action="store_true")

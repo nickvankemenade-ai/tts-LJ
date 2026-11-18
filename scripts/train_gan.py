@@ -63,7 +63,7 @@ def main() -> None:
     p.add_argument("--hours", type=float, default=6.0, help="wall-clock training budget")
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--data-dir", type=Path, default=DEFAULT_WORK_DIR / "data")
-    p.add_argument("--out", type=Path, default=DEFAULT_WORK_DIR / "runs" / "gan_v1")
+    p.add_argument("--out", type=Path, default=DEFAULT_WORK_DIR / "runs" / "gan")
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--segment", type=int, default=8192, help="samples per training clip")
     p.add_argument("--lr", type=float, default=2e-4)

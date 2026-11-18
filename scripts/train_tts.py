@@ -69,8 +69,8 @@ def main() -> None:
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--preset", choices=sorted(TTS_PRESETS), default="base")
     p.add_argument("--data-dir", type=Path, default=DEFAULT_WORK_DIR / "data")
-    p.add_argument("--out", type=Path, default=None, help="default: runs/tts_<preset>")
-    p.add_argument("--vocoder", type=Path, default=DEFAULT_WORK_DIR / "runs" / "gan_v1" / "latest.pt",
+    p.add_argument("--out", type=Path, default=DEFAULT_WORK_DIR / "runs" / "tts")
+    p.add_argument("--vocoder", type=Path, default=DEFAULT_WORK_DIR / "runs" / "gan" / "latest.pt",
                    help="vocoder checkpoint for the audio samples (skipped if missing)")
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--lr", type=float, default=2e-4)
@@ -95,7 +95,7 @@ def main() -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
     amp = not args.no_amp and device.type == "cuda"
-    out = args.out or DEFAULT_WORK_DIR / "runs" / f"tts_{args.preset}"
+    out = args.out
     out.mkdir(parents=True, exist_ok=True)
     (out / "samples").mkdir(exist_ok=True)
     melfn = LogMel().to(device)
