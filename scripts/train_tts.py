@@ -70,8 +70,9 @@ def main() -> None:
     p.add_argument("--preset", choices=sorted(TTS_PRESETS), default="base")
     p.add_argument("--data-dir", type=Path, default=DEFAULT_WORK_DIR / "data")
     p.add_argument("--out", type=Path, default=DEFAULT_WORK_DIR / "runs" / "tts")
-    p.add_argument("--vocoder", type=Path, default=DEFAULT_WORK_DIR / "runs" / "gan" / "latest.pt",
-                   help="vocoder checkpoint for the audio samples (skipped if missing)")
+    p.add_argument("--vocoder", type=Path, default=None,
+                   help="vocoder for the audio samples (default: runs/gan/latest.pt if it exists, "
+                        "else pretrained/vocoder.pt; samples are skipped if neither exists)")
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--warmup-steps", type=int, default=1000)
@@ -138,6 +139,9 @@ def main() -> None:
         print(f"initialized from {args.init} (step {step}, {elapsed / 3600:.2f} h), fresh optimizer with warm-up")
     start_step = step
 
+    if args.vocoder is None:
+        own = DEFAULT_WORK_DIR / "runs" / "gan" / "latest.pt"
+        args.vocoder = own if own.exists() else DEFAULT_WORK_DIR / "pretrained" / "vocoder.pt"
     vocoder = None
     if args.vocoder.exists():
         vocoder = load_vocoder(args.vocoder, device)[0]

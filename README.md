@@ -18,10 +18,12 @@ It includes a local web app for typing text and hearing it, and for recording, l
 
 Both models are trained from random initialization: no pretrained weights, no external aligner, no phonemizer.
 
-### The trained models
+### Pretrained models
 
-- **Vocoder:** trained on a 10-hour subset of LJSpeech (`prepare_data.py --max-hours 10`).
-- **Text to mel:** trained on the same 10-hour subset first, then continued on the full dataset (about 24 hours). Training was stopped early, once the validation losses stopped improving. That means fewer training steps, not less data: every batch is drawn from the whole training split, so the model saw all of it many times over.
+Two trained checkpoints are included in `pretrained/`:
+
+- **`pretrained/vocoder.pt`** (56 MB): trained on a 10-hour subset of LJSpeech (`prepare_data.py --max-hours 10`).
+- **`pretrained/tts.pt`** (61 MB): text to mel, trained on the same 10-hour subset first, then continued on the full dataset (about 24 hours). Training was stopped early, once the validation losses stopped improving. That means fewer training steps, not less data: every batch is drawn from the whole training split, so the model saw all of it many times over.
 
 The text-to-mel model reads characters directly. It learns how spelling maps to sound from the data alone, so it handles most common irregular words ("though", "through", "thought"). It doesn't reliably handle homographs or rare spellings, though (see [Limitations](#limitations)).
 
@@ -33,17 +35,19 @@ Requirements: Python 3.10, PyTorch 2.3 with CUDA, torchaudio and numba. A CPU wo
 pip install -r requirements.txt
 ```
 
-The two trained checkpoints are included in the repository: `runs/gan/latest.pt` (vocoder, 56 MB) and `runs/tts/latest.pt` (text to mel, 61 MB). The app uses them by default, so it runs straight after cloning:
+The app uses the pretrained models by default, so it runs straight after cloning:
 
 ```bash
 python scripts/app.py          # opens http://localhost:8765
 ```
 
+- **Models:** choose **Pretrained**, the checkpoints in `pretrained/`, or **Your own (runs/)**, the checkpoints that `train_gan.py` and `train_tts.py` save.
+  - The line under the controls shows which models are in use. If a model is missing from `runs/`, it says so in red, and that stage can't be used until you train it.
 - **Text to speech:** type text, set the speed, press **Speak**, then play or download the WAV.
 - **Spectrogram:** shows the mel spectrogram the vocoder receives. You can also record from the microphone, load a held-out LJSpeech recording (**Example**), or start from a **Blank** canvas.
 - **Paint and erase:** draw on the spectrogram and press **Vocode** to hear the result. With **harmonics** on, the brush also paints the overtones of the pitch you draw, so low lines sound voice-like rather than like pure tones.
 
-The app reloads a checkpoint whenever training saves a new one, so it can be used while a model trains.
+With **Your own** selected, the app reloads a checkpoint whenever training saves a new one, so you can listen to a model while it trains.
 
 ## Data
 
@@ -81,7 +85,7 @@ python scripts/train_gan.py --hours 6         # vocoder, saves to runs/gan/
 python scripts/train_tts.py --hours 2         # text to mel, saves to runs/tts/
 ```
 
-The two models train independently and can run one after the other or in parallel. `train_tts.py` uses the vocoder in `runs/gan/latest.pt`, if it exists, only to turn its evaluation samples into audio.
+The two models train independently and can run one after the other or in parallel. `train_tts.py` uses a vocoder only to turn its evaluation samples into audio: `runs/gan/latest.pt` if you've trained one, otherwise `pretrained/vocoder.pt`.
 
 - **Budgets:** training runs under a **wall-clock budget**. `--hours` counts the total training time of a run, including time from `--init` or `--resume`, and the learning rate follows a cosine schedule over it.
 - **`--init PATH`:** starts text-to-mel training from another checkpoint's weights, with a fresh optimizer.
@@ -148,6 +152,8 @@ scripts/
   train_gan.py     train the vocoder
   train_tts.py     train the text-to-mel model
   app.py           the web app server (no web framework needed)
+pretrained/      the released checkpoints: tts.pt (text to mel) and vocoder.pt
+runs/            your own training runs (created by the training scripts, not in git)
 tests/           shapes, alignment search, data preparation, short training runs
 ```
 

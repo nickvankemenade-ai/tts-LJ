@@ -2,8 +2,10 @@
 
   python scripts/app.py          # http://localhost:8765
 
-Uses runs/tts/latest.pt (text to mel) and runs/gan/latest.pt (vocoder) by default.
-Both are reloaded automatically when training saves a new checkpoint, so the app can be used
+Two model sets, chosen per request with the page's Models menu:
+  pretrained   pretrained/tts.pt and pretrained/vocoder.pt (the released checkpoints)
+  own          runs/tts/latest.pt and runs/gan/latest.pt (what train_tts.py / train_gan.py save)
+Own checkpoints are reloaded automatically when training saves a new one, so the app can be used
 while a model trains. Uses only the standard library plus the repo's own dependencies.
 """
 
@@ -36,11 +38,15 @@ MAX_FRAMES = 20 * SAMPLE_RATE // HOP  # 20 seconds
 class Reloading:
     """Holds a model and reloads it when its checkpoint file changes."""
 
-    def __init__(self, ckpt: Path, device: torch.device, loader):
-        self.ckpt, self.device, self.loader = ckpt, device, loader
+    def __init__(self, ckpt: Path, device: torch.device, loader, label: str = "model"):
+        self.ckpt, self.device, self.loader, self.label = ckpt, device, loader, label
         self.lock = threading.Lock()
         self.mtime = self.model = None
         self.info = {}
+        try:  # folder shown to the user, relative to the repo where possible, e.g. "runs/tts/"
+            self.dir = self.ckpt.resolve().parent.relative_to(DEFAULT_WORK_DIR).as_posix() + "/"
+        except ValueError:
+            self.dir = str(self.ckpt.parent)
 
     def refresh(self) -> None:
         if not self.ckpt.exists():
@@ -55,12 +61,12 @@ class Reloading:
     def status(self) -> dict:
         with self.lock:
             self.refresh()
-            return {"checkpoint": str(self.ckpt), "loaded": self.model is not None, **self.info}
+            return {"dir": self.dir, "loaded": self.model is not None, **self.info}
 
     def get(self):
         self.refresh()
         if self.model is None:
-            raise RuntimeError(f"no checkpoint yet at {self.ckpt}")
+            raise RuntimeError(f"No {self.label} model found in {self.dir}")
         return self.model
 
 
@@ -75,8 +81,29 @@ def mel_from_payload(body: dict) -> torch.Tensor:
     return torch.tensor(body["mel"], dtype=torch.float32).reshape(N_MELS, frames)
 
 
-def make_handler(voc: Reloading, tts: Reloading, melfn: LogMel, data_dir: Path):
-    device = voc.device
+class ModelSets:
+    """The pretrained and the user's own checkpoints for both stages."""
+
+    def __init__(self, paths: dict[str, dict[str, Path]], device: torch.device):
+        loaders = {"tts": load_tts, "vocoder": load_vocoder}
+        labels = {"tts": "text-to-mel", "vocoder": "vocoder"}
+        self.device = device
+        self.sets = {name: {stage: Reloading(path, device, loaders[stage], labels[stage])
+                            for stage, path in stages.items()}
+                     for name, stages in paths.items()}
+
+    def pick(self, which: str, stage: str) -> Reloading:
+        """The model for ``stage`` ("tts" or "vocoder") in set ``which`` ("pretrained" or "own")."""
+        if which not in self.sets:
+            raise ValueError(f"unknown model set {which!r}")
+        return self.sets[which][stage]
+
+    def status(self) -> dict:
+        return {name: {stage: r.status() for stage, r in stages.items()} for name, stages in self.sets.items()}
+
+
+def make_handler(models: ModelSets, melfn: LogMel, data_dir: Path):
+    device = models.device
 
     def wav_bytes(wav: torch.Tensor) -> bytes:
         buf = io.BytesIO()
@@ -109,7 +136,7 @@ def make_handler(voc: Reloading, tts: Reloading, melfn: LogMel, data_dir: Path):
                     self.send_json({"sample_rate": SAMPLE_RATE, "hop": HOP, "n_mels": N_MELS, "floor": FLOOR,
                                     "bins_hz": bin_frequencies(), "max_frames": MAX_FRAMES})
                 elif url.path == "/api/status":
-                    self.send_json({"vocoder": voc.status(), "tts": tts.status()})
+                    self.send_json(models.status())
                 elif url.path in ("/api/example", "/api/example_wav"):
                     i = int(parse_qs(url.query).get("i", ["0"])[0])
                     utts = load_utterances(data_dir, "val", n=i + 1, max_seconds=6.0)
@@ -138,6 +165,7 @@ def make_handler(voc: Reloading, tts: Reloading, melfn: LogMel, data_dir: Path):
                     if len(ids) < 3:
                         raise ValueError("type some text (letters and punctuation)")
                     speed = min(2.0, max(0.5, float(body.get("speed", 1.0))))
+                    tts = models.pick(str(body.get("models", "pretrained")), "tts")
                     with tts.lock:
                         model = tts.get()
                         mel, _ = model.synthesize(torch.tensor([ids], device=device),
@@ -145,7 +173,9 @@ def make_handler(voc: Reloading, tts: Reloading, melfn: LogMel, data_dir: Path):
                                                   length_scale=1.0 / speed)
                     self.send_json(mel_payload(mel[0, :, :MAX_FRAMES].float().cpu()))
                 elif url.path == "/api/vocode":
-                    mel = mel_from_payload(json.loads(self.body()))
+                    body = json.loads(self.body())
+                    mel = mel_from_payload(body)
+                    voc = models.pick(str(body.get("models", "pretrained")), "vocoder")
                     with voc.lock:
                         wav = vocode(voc.get(), mel.to(device)[None])[0].cpu()
                     self.send(200, wav_bytes(wav), "audio/wav")
@@ -159,9 +189,9 @@ def make_handler(voc: Reloading, tts: Reloading, melfn: LogMel, data_dir: Path):
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    runs = DEFAULT_WORK_DIR / "runs"
-    p.add_argument("--vocoder", type=Path, default=runs / "gan" / "latest.pt")
-    p.add_argument("--tts", type=Path, default=runs / "tts" / "latest.pt")
+    p.add_argument("--pretrained-dir", type=Path, default=DEFAULT_WORK_DIR / "pretrained")
+    p.add_argument("--own-vocoder", type=Path, default=DEFAULT_WORK_DIR / "runs" / "gan" / "latest.pt")
+    p.add_argument("--own-tts", type=Path, default=DEFAULT_WORK_DIR / "runs" / "tts" / "latest.pt")
     p.add_argument("--data-dir", type=Path, default=DEFAULT_WORK_DIR / "data", help="for the example recordings")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--cpu", action="store_true")
@@ -169,10 +199,12 @@ def main() -> None:
     args = p.parse_args()
 
     device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
-    voc = Reloading(args.vocoder, device, load_vocoder)
-    tts = Reloading(args.tts, device, load_tts)
-    print(json.dumps({"vocoder": voc.status(), "tts": tts.status()}))
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(voc, tts, LogMel().to(device), args.data_dir))
+    models = ModelSets({
+        "pretrained": {"tts": args.pretrained_dir / "tts.pt", "vocoder": args.pretrained_dir / "vocoder.pt"},
+        "own": {"tts": args.own_tts, "vocoder": args.own_vocoder},
+    }, device)
+    print(json.dumps(models.status()))
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(models, LogMel().to(device), args.data_dir))
     url = f"http://localhost:{args.port}"
     print(f"app running at {url}  (Ctrl+C to stop)")
     if not args.no_browser:

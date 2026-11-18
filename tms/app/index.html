@@ -12,7 +12,7 @@
   :root {
     --ground:#1d1d1d; --surface:#272726; --band:#2e2e2d; --border:#3a3a38;
     --text:#ececea; --text-body:#cfcfcb; --text-muted:#a6a6a2;
-    --accent:#8ba5c1; --accent-ink:#16191d; --link:#9db4cc; --bad:#e08a7a;
+    --accent:#8ba5c1; --accent-ink:#16191d; --link:#9db4cc; --bad:#e5534b;
     --serif:"Newsreader", Georgia, serif; --sans:"Instrument Sans", system-ui, -apple-system, sans-serif;
     --radius:10px;
   }
@@ -64,6 +64,10 @@
   #msg { color:var(--text-muted); font-size:14px; min-height:21px; margin:12px 0 0; }
   #msg.err { color:var(--bad); }
   #msg:empty { display:none; }
+  select { background:var(--ground); color:var(--text); border:1px solid var(--border); border-radius:8px;
+    padding:8px 10px; font:14px var(--sans); }
+  .model-info { color:var(--text-muted); font-size:13px; margin:12px 0 0; }
+  .model-info .missing { color:var(--bad); }
 
   @media (max-width:640px) { main { padding:36px 16px; } }
 </style>
@@ -77,6 +81,10 @@
   <section class="card">
     <textarea id="ttsText" maxlength="1000" spellcheck="false"></textarea>
     <div class="controls">
+      <label>models <select id="modelSet">
+        <option value="pretrained">Pretrained (Nick van Kemenade)</option>
+        <option value="own">Your own (runs/)</option>
+      </select></label>
       <label>speed <input type="range" id="ttsSpeed" min="0.6" max="1.6" step="0.05" value="1"> <span id="speedV">1.00×</span></label>
       <span class="spacer"></span>
       <button id="speakBtn" class="primary">Speak</button>
@@ -85,6 +93,7 @@
       <audio id="outAudio" controls></audio>
       <a id="dl" download="speech.wav" hidden>Download WAV</a>
     </div>
+    <p id="modelInfo" class="model-info"></p>
     <p id="msg"></p>
   </section>
 
@@ -236,7 +245,7 @@ function play(blob) {
   $("dl").href = url; $("dl").hidden = false;
 }
 async function vocode() {
-  const r = await postJSON("/api/vocode", { frames, mel: Array.from(data) });
+  const r = await postJSON("/api/vocode", { frames, mel: Array.from(data), models: $("modelSet").value });
   play(await r.blob());
 }
 $("vocodeBtn").onclick = async () => {
@@ -254,7 +263,7 @@ $("speakBtn").onclick = async () => {
   if (!text) return msg("type some text first", true);
   const btn = $("speakBtn"); btn.disabled = true; msg("speaking…");
   try {
-    const r = await postJSON("/api/tts", { text, speed: +$("ttsSpeed").value });
+    const r = await postJSON("/api/tts", { text, speed: +$("ttsSpeed").value, models: $("modelSet").value });
     setMel(await r.json()); $("origRow").hidden = true;
     await vocode();
     msg("");
@@ -315,8 +324,33 @@ function encodeWav(samples, sr) {
   return buf;
 }
 
+// ---- model choice ----
+async function refreshModels() {
+  try {
+    const s = await (await api("/api/status")).json(), which = $("modelSet").value, box = $("modelInfo");
+    box.replaceChildren();
+    if (which === "pretrained") {
+      box.textContent = "Pretrained text-to-mel and vocoder.";
+      return;
+    }
+    [["tts", "text-to-mel"], ["vocoder", "vocoder"]].forEach(([stage, label], n) => {
+      const own = s.own[stage], span = document.createElement("span");
+      if (own.loaded) span.textContent = `your ${label}: step ${own.step.toLocaleString()} (${own.hours} h)`;
+      else { span.className = "missing"; span.textContent = `No ${label} model found in ${own.dir}`; }
+      if (n) box.append(" · ");
+      box.append(span);
+    });
+  } catch (e) { $("modelInfo").textContent = "model status unavailable: " + e.message; }
+}
+$("modelSet").onchange = () => {
+  try { localStorage.setItem("modelSet", $("modelSet").value); } catch {}
+  refreshModels();
+};
+
 (async () => {
   info = await (await api("/api/info")).json();
+  try { const saved = localStorage.getItem("modelSet"); if (saved) $("modelSet").value = saved; } catch {}
+  refreshModels(); setInterval(refreshModels, 30000);  // own checkpoints change while training
   $("blankBtn").click();
 })();
 </script>
